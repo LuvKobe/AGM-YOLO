@@ -1,0 +1,9 @@
+name: agm-yolo
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      # Install CUDA-enabled torch 2.5.1 separately as documented in README.
+      - -r requirements.txt

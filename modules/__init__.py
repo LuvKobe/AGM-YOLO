@@ -1,7 +1,4 @@
-"""Independent PyTorch implementations of AIC, GCE and MSA."""
+"""Backward-compatible imports for the original AGM-YOLO repository layout."""
+from agm_yolo.core import AIC, GCE, MSA
 
-from .aic import AIC
-from .gce import GCE
-from .msa import MSA
-
-__all__ = ['AIC', 'GCE', 'MSA']
+__all__ = ["AIC", "GCE", "MSA"]

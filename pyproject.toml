@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agm-yolo"
+version = "1.0.0"
+description = "Reproducible implementation of AGM-YOLO for wood surface defect detection"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = {text = "MIT"}
+authors = [{name = "AGM-YOLO authors"}]
+dependencies = [
+  "ultralytics==8.3.138",
+  "opencv-python==4.10.0.84",
+  "numpy==1.26.4",
+  "PyYAML==6.0.2",
+  "pandas==2.2.3",
+  "pycocotools==2.0.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["agm_yolo*", "modules*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,158 +1,349 @@
-# AGM-YOLO Core Modules
+# AGM-YOLO
 
-PyTorch implementation of the three feature-enhancement modules used in **AGM-YOLO: A Wood Defect Detection Algorithm with Illumination Calibration and Multi-Scale Feature Enhancement**:
+PyTorch/Ultralytics implementation of **AGM-YOLO: A Wood Defect Detection Algorithm with Illumination Calibration and Multi-Scale Feature Enhancement**.
 
-- **AIC** — Adaptive Illumination Calibration
-- **GCE** — Global Context Enhancement
-- **MSA** — Multi-Scale Selective Aggregation
+AGM-YOLO is built on YOLO11n and introduces three task-oriented components for wood-surface defect detection:
 
-This repository is provided as the code companion for the manuscript and focuses on the proposed modules. The source files depend only on PyTorch and can be integrated into an existing detection framework.
+- **AIC (Adaptive Illumination Calibration):** channel-wise residual recalibration for illumination-sensitive features;
+- **GCE (Global Context Enhancement):** joint channel, horizontal, and vertical context modeling;
+- **MSA (Multi-Scale Selective Aggregation):** gated adjacent-scale feature fusion before the detection head.
 
-## Repository structure
+This repository provides the model implementation, complete AIC/GCE/MSA ablation configurations, training and validation scripts, dataset preparation utilities, robustness evaluation, scale-specific AP evaluation, latency/memory benchmarking, TensorRT export, and visualization tools.
+
+## 1. Repository structure
 
 ```text
-AGM-modules/
-├── modules/
-│   ├── aic.py
-│   ├── gce.py
-│   ├── msa.py
-│   └── __init__.py
-├── tests/
-│   └── test_modules.py
-├── .github/workflows/tests.yml
-├── example.py
+AGM-YOLO/
+├── agm_yolo/                  # Core modules and Ultralytics integration
+├── models/
+│   ├── agm-yolo11n.yaml       # Full AGM-YOLO model
+│   ├── yolo11n-baseline.yaml
+│   └── ablations/             # Eight AIC/GCE/MSA combinations
+├── scripts/                   # Train, validate, predict and ablation runs
+├── tools/                     # Dataset preparation and split utilities
+├── experiments/               # Robustness, scale AP, benchmarking, Grad-CAM
+├── tests/                     # Unit and integration tests
+├── environment.yml
 ├── requirements.txt
-├── requirements-dev.txt
-├── pytest.ini
-├── TESTING.md
-└── LICENSE
+└── REPRODUCIBILITY.md
 ```
 
-## Installation
+## 2. Environment
 
-Python 3.10 or later is recommended.
+The experiments use:
+
+- Python 3.10
+- PyTorch 2.5.1
+- CUDA 12.1
+- Ultralytics 8.3.138
+- mixed-precision training
+
+Recommended installation:
 
 ```bash
-python -m pip install -r requirements.txt
+conda create -n agm-yolo python=3.10 -y
+conda activate agm-yolo
+
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+pip install -e . --no-deps
 ```
 
-For development and tests:
+Run the tests:
 
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest
+pytest
+python -m scripts.smoke_test
 ```
 
-## Quick start
+The smoke test reports AIC at backbone layers `[2, 4, 6, 8]`, GCE at layer `[10]`, and the MSA-enabled detection head at layer `[23]`.
 
-```bash
-python example.py --device cpu
-```
+## 3. Model configuration
 
-If a CUDA-enabled PyTorch installation is available:
-
-```bash
-python example.py --device cuda
-```
-
-## AIC: Adaptive Illumination Calibration
-
-AIC generates a channel-wise calibration factor from global spatial statistics and applies it to the input feature map:
+The full model is defined in:
 
 ```text
-z = mean(x, spatial dimensions)
-s = sigmoid(conv2(relu(conv1(z))))
-y = x × (1 + s)
+models/agm-yolo11n.yaml
 ```
 
-```python
-import torch
-from modules import AIC
+AGM-YOLO preserves the standard YOLO11n stage layout. AIC is attached to the backbone C3k2 stages, GCE follows C2PSA, and MSA operates on P3/P4/P5 immediately before detection.
 
-x = torch.randn(2, 64, 80, 80)
-aic = AIC(channels=64, reduction=16)
-y = aic(x)
-```
+The implementation is integrated with Ultralytics at runtime through `agm_yolo/integration.py`, so no manual modification of the installed Ultralytics package is required.
 
-The output has the same shape as the input.
+## 4. Golden-Y dataset
 
-## GCE: Global Context Enhancement
+Primary dataset:
 
-GCE models channel, horizontal, and vertical context with three multiplicative attention branches:
+**Wood Defect Detection Dataset v1, Golden Y, Roboflow Universe**  
+<https://universe.roboflow.com/yolo11-yqwwf/wood-defect-detection-dataset-w0ws3/dataset/1>
+
+Dataset split:
+
+| Split | Images |
+|---|---:|
+| Train | 2,641 |
+| Validation | 755 |
+| Test | 377 |
+
+Class order:
 
 ```text
-Mc = channel_mlp(mean(x, height and width))
-Mw = sigmoid(width_conv(mean(x, height)))
-Mh = sigmoid(height_conv(mean(x, width)))
-y = x × Mc × Mw × Mh
+0 dry knot
+1 edge knot
+2 small knot
+3 sound knot
+4 split
+5 wave
 ```
 
-```python
-from modules import GCE
-
-gce = GCE(channels=64, reduction=16)
-y = gce(x)
-```
-
-## MSA: Multi-Scale Selective Aggregation
-
-MSA aligns adjacent-scale features to the current scale and performs spatially adaptive aggregation:
-
-```text
-aligned_i = resize(project_1x1(adjacent_i), current spatial size)
-weight_i = sigmoid(gate_1x1(concat(current, aligned_i)))
-output = current + sum(weight_i × aligned_i)
-```
-
-```python
-import torch
-from modules import MSA
-
-p3 = torch.randn(2, 64, 80, 80)
-p4 = torch.randn(2, 128, 40, 40)
-p5 = torch.randn(2, 256, 20, 20)
-
-msa3 = MSA([64, 128])
-msa4 = MSA([128, 64, 256])
-msa5 = MSA([256, 128])
-
-q3 = msa3([p3, p4])
-q4 = msa4([p4, p3, p5])
-q5 = msa5([p5, p4])
-```
-
-For each MSA branch, the first tensor is the current-scale feature and the remaining tensors are adjacent-scale features. All feature tensors must use the same batch size, device, and data type.
-
-## Integration with YOLO
-
-In the AGM-YOLO architecture, the modules are used as feature-enhancement components within the backbone/neck pipeline before the detection head. When integrating them into an Ultralytics-based project, register the custom modules in the model parser and pass the channel dimensions produced by the selected model scale.
-
-The following implementation settings are used in this repository:
-
-| Component | Setting |
-| --- | --- |
-| AIC/GCE reduction ratio | 16 by default |
-| Intermediate activation | ReLU |
-| MSA channel alignment | Independent 1×1 convolution for each adjacent scale |
-| MSA spatial alignment | Bilinear interpolation with `align_corners=False` |
-| MSA gating | Independent sigmoid spatial gate for each adjacent scale |
-| Parameter initialization | PyTorch default initialization |
-
-## Tests
-
-The test suite checks tensor shapes, mathematical operations, gradients, serialization, error handling, non-square feature maps, and optional CUDA mixed-precision execution.
+After exporting the dataset in Ultralytics YOLO format, the split can be summarized with:
 
 ```bash
-python -m pytest
+python -m tools.audit_golden_y \
+  --data D:/datasets/wood-defect/data.yaml \
+  --write-manifest datasets/golden_y_manifest.csv \
+  --strict
 ```
 
-See [TESTING.md](TESTING.md) for additional information.
+## 5. Training
 
+### AGM-YOLO
 
-## Citation
+```bash
+python -m scripts.train \
+  --model models/agm-yolo11n.yaml \
+  --data D:/datasets/wood-defect/data.yaml \
+  --pretrained yolo11n.pt \
+  --device 0 \
+  --seed 0 \
+  --project runs/golden_y \
+  --name agm_yolo_seed0
+```
 
-If this code is useful in your research, please cite the accompanying AGM-YOLO manuscript. Publication metadata will be added here after the paper is formally published.
+### YOLO11n baseline
 
-## License
+```bash
+python -m scripts.train \
+  --model models/ablations/baseline.yaml \
+  --data D:/datasets/wood-defect/data.yaml \
+  --pretrained yolo11n.pt \
+  --device 0 \
+  --seed 0 \
+  --project runs/golden_y \
+  --name yolo11n_seed0
+```
 
-The code in this repository is released under the MIT License. See [LICENSE](LICENSE).
+Default training settings are AdamW, 200 epochs, 3 warm-up epochs, batch size 8, image size 640, `lr0=0.01`, `lrf=0.01`, weight decay `5e-4`, AMP, and deterministic execution.
+
+## 6. Validation
+
+```bash
+python -m scripts.val \
+  --weights runs/golden_y/agm_yolo_seed0/weights/best.pt \
+  --data D:/datasets/wood-defect/data.yaml \
+  --split test \
+  --device 0
+```
+
+Evaluation artifacts and machine-readable metrics are written to the run directory.
+
+## 7. AIC/GCE/MSA ablation study
+
+Eight factorial configurations are included:
+
+```text
+baseline
+aic
+gce
+msa
+aic+gce
+aic+msa
+gce+msa
+aic+gce+msa
+```
+
+Run the full ablation study:
+
+```bash
+python -m scripts.run_ablation \
+  --data D:/datasets/wood-defect/data.yaml \
+  --device 0 \
+  --seed 0
+```
+
+The YAML files can be regenerated with:
+
+```bash
+python -m scripts.generate_ablation_yamls
+```
+
+## 8. Repeated runs
+
+Independent seeds can be launched with:
+
+```bash
+python -m scripts.train_multiseed \
+  --model models/agm-yolo11n.yaml \
+  --data D:/datasets/wood-defect/data.yaml \
+  --seeds 0 1 2 \
+  --device 0
+```
+
+## 9. Scale-specific AP
+
+Small, medium, and large object AP are evaluated on the 640×640 letterboxed canvas using COCO area thresholds:
+
+- small: area < 32² px²
+- medium: 32² ≤ area < 96² px²
+- large: area ≥ 96² px²
+
+```bash
+python -m experiments.scale_ap \
+  --weights runs/golden_y/agm_yolo_seed0/weights/best.pt \
+  --data D:/datasets/wood-defect/data.yaml \
+  --split test \
+  --imgsz 640 \
+  --device 0 \
+  --out results/agm_scale_ap.json
+```
+
+## 10. Illumination and noise robustness
+
+The stress suite evaluates brightness scaling with `alpha ∈ {1.0, 0.8, 0.6, 0.4}` and Gaussian noise at the `alpha=0.6` condition with `sigma ∈ {0.01, 0.02}`.
+
+```bash
+python -m experiments.run_stress_suite \
+  --weights runs/golden_y/agm_yolo_seed0/weights/best.pt \
+  --data D:/datasets/wood-defect/data.yaml \
+  --device 0 \
+  --fp-conf 0.25 \
+  --out results/agm_stress.json
+```
+
+`FP/image` is computed by class-aware greedy matching at IoU ≥ 0.50 with the fixed confidence threshold supplied by `--fp-conf`.
+
+## 11. Low-light subset evaluation
+
+The low-light evaluation ranks test images by normalized Rec.709 luminance and evaluates the lowest luminance quartile.
+
+```bash
+python -m experiments.lowlight \
+  --weights runs/golden_y/agm_yolo_seed0/weights/best.pt \
+  --data D:/datasets/wood-defect/data.yaml \
+  --device 0 \
+  --fp-conf 0.25 \
+  --out results/agm_lowlight.json
+```
+
+## 12. Latency and memory benchmark
+
+For CUDA FP16 inference:
+
+```bash
+python -m experiments.benchmark \
+  --weights runs/golden_y/agm_yolo_seed0/weights/best.pt \
+  --device cuda:0 \
+  --imgsz 640 \
+  --warmup 50 \
+  --runs 300 \
+  --half \
+  --out results/agm_fp16.json
+```
+
+The benchmark uses batch size 1, synchronized CUDA timing, warm-up iterations, and peak CUDA memory measurement.
+
+## 13. TensorRT export
+
+```bash
+python -m experiments.export_tensorrt \
+  --weights best.pt \
+  --imgsz 640 \
+  --device 0
+```
+
+The exported TensorRT engine can be benchmarked on the target deployment platform using the same input resolution and batch size.
+
+## 14. VSB dataset evaluation
+
+VSB wood surface defect dataset:
+
+- Zenodo: <https://doi.org/10.5281/zenodo.4694695>
+- Dataset paper: <https://doi.org/10.12688/f1000research.52903.2>
+
+Seven retained classes:
+
+```text
+0 Live Knot
+1 Dead Knot
+2 Marrow
+3 Resin Pocket
+4 Knot with Crack
+5 Knot Missing
+6 Crack
+```
+
+Prepare the 2,800-image seed-42 split:
+
+```bash
+python -m tools.prepare_vsb \
+  --images D:/datasets/VSB/Images \
+  --boxes D:/datasets/VSB/Bounding_Boxes \
+  --out datasets/vsb_7class_seed42 \
+  --subset-size 2800 \
+  --seed 42 \
+  --test-fraction 0.30 \
+  --val-fraction-of-train 0.10 \
+  --resize 1280 512
+```
+
+Train on the prepared dataset:
+
+```bash
+python -m scripts.train_vsb \
+  --data datasets/vsb_7class_seed42/data.yaml \
+  --device 0 \
+  --seed 42
+```
+
+The conversion utility writes `data.yaml`, `split_manifest.csv`, and `conversion_report.json` together with the converted YOLO annotations.
+
+## 15. Prediction and Grad-CAM
+
+Prediction:
+
+```bash
+python -m scripts.predict \
+  --weights best.pt \
+  --source path/to/test_images \
+  --conf 0.25 \
+  --device 0
+```
+
+Grad-CAM visualization:
+
+```bash
+python -m experiments.gradcam \
+  --weights best.pt \
+  --image path/to/test_image.jpg \
+  --layer 22 \
+  --device 0 \
+  --out results/gradcam.png
+```
+
+## 16. Reproducibility
+
+A compact experiment protocol is provided in [REPRODUCIBILITY.md](REPRODUCIBILITY.md). Training runs also save configuration and environment metadata to support consistent repeated evaluation.
+
+## 17. License
+
+The AGM-YOLO source code in this repository is released under the MIT License. Ultralytics and the referenced datasets remain subject to their respective licenses and terms.
+
+## 18. Citation
+
+```bibtex
+@article{agm_yolo_2026,
+  title   = {AGM-YOLO: A Wood Defect Detection Algorithm with Illumination Calibration and Multi-Scale Feature Enhancement},
+  author  = {Hu, Cheng and Chen, Yajun and Liu, Wenhao},
+  year    = {2026}
+}
+```

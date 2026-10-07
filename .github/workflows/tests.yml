@@ -1,5 +1,7 @@
-name: Module tests
-on: [push, pull_request]
+name: tests
+on:
+  push:
+  pull_request:
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -8,7 +10,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - run: python -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
-      - run: python -m pip install pytest
-      - run: python -m pytest
-      - run: python example.py
+      - run: python -m pip install --upgrade pip
+      - run: pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - run: pip install -e . --no-deps
+      - run: pytest
